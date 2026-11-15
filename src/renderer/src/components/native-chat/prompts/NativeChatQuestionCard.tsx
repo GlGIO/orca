@@ -1,5 +1,5 @@
 import { ImeTextarea } from '@/lib/text-input/ime/ime-text-field'
-import { useRef, useState, type RefObject } from 'react'
+import { useRef, useState } from 'react'
 import { Check, Pencil } from 'lucide-react'
 import { cn } from '@/lib/class-names'
 import { translate } from '@/i18n/i18n'
@@ -11,15 +11,12 @@ import {
   NativeChatQuestionSteps,
   useReportNativeChatQuestionDraft,
   foldNativeChatQuestionOnEscape,
-  type NativeChatQuestionCardDraft,
-  type NativeChatQuestionCardLook
+  type NativeChatQuestionCardProps
 } from './NativeChatQuestionCardParts'
 import type { AskAnswerSelection } from '../../../../../shared/native-chat/input/questions/native-chat-ask-answer'
-import type { AskPrompt } from '../../../../../shared/native-chat/input/questions/native-chat-ask-types'
 import { useNativeChatPromptCardFocus } from './use-native-chat-prompt-card-focus'
 import { useNativeChatQuestionAutoAdvance } from './use-native-chat-question-auto-advance'
 import { useNativeChatQuestionKeys } from './use-native-chat-question-keys'
-import type { AgentJournalFreeTextInput } from '../../../../../shared/agent-session/journal/agent-session-journal-types'
 import {
   askAcceptsEmptyAnswer,
   askConfirmAction,
@@ -30,28 +27,7 @@ import {
   toggleAskOption
 } from '../../../../../shared/native-chat/input/questions/native-chat-ask-card-rules'
 
-export type NativeChatQuestionCardProps = {
-  prompt: AskPrompt
-  /** Whether the snapshotted answer is still being delivered to the agent. */
-  isSubmitting?: boolean
-  isCancelling?: boolean
-  /** Deliver the chosen answer (per-question option indices + free text). */
-  onAnswer: (selections: AskAnswerSelection[]) => void
-  allowOther?: boolean | readonly boolean[]
-  freeTextInputs?: readonly (AgentJournalFreeTextInput | undefined)[]
-  /** Dismiss the prompt (sends Escape to the agent). Without it (an item's question has nothing
-   *  to dismiss) the card has no ×, and an unanswered last step shows Submit, off, instead of Skip. */
-  onCancel?: () => void
-  /** Fold the card to a strip and give the input back, writing nothing; Escape does too. */
-  onCollapse?: () => void
-  /** Take focus when the card takes the input region; number keys pick while it holds. */
-  shouldFocus?: boolean
-  /** Paste target while the card replaces the composer. */
-  answerInputRef?: RefObject<HTMLTextAreaElement | null>
-  /** Another surface's own look for the card (an item page's open question). */
-  look?: NativeChatQuestionCardLook
-  draft?: NativeChatQuestionCardDraft
-}
+export type { NativeChatQuestionCardProps } from './NativeChatQuestionCardParts'
 
 // Reserve a non-option index so single-select holds either an option or typed text.
 const TYPED_ANSWER = -1
@@ -147,18 +123,20 @@ export function NativeChatQuestionCard({
     return [...picked, ...(other ? [other] : [])].join(', ')
   }
 
+  // By picked option, not label: a provider may offer a choice whose label is empty.
   const answeredAt = (qi: number, sel = selections, oth = otherText): boolean =>
-    answerFor(qi, sel, oth).length > 0 || acceptsEmpty(qi)
+    pickedOptions(qi, sel).length > 0 || typedAnswerChosen(qi, sel, oth)
   const currentAnswered = answeredAt(index)
   const anyAnswered = prompt.questions.some((_, i) => answeredAt(i))
   // With nothing to dismiss (an item's ask), only a whole answer goes: Submit waits for every step.
-  const nothingToSend =
-    !onCancel && isLast && prompt.questions.some((_, i) => !answeredAt(i))
+  const nothingToSend = !onCancel && isLast && prompt.questions.some((_, i) => !answeredAt(i))
   const waitsForAnswer = q.required === true && !currentAnswered
+  const unansweredRequired = askUnansweredRequired(prompt.questions, (i) => answeredAt(i))
   const confirmLabel = askConfirmLabel(
     currentAnswered || waitsForAnswer,
     isLast,
-    anyAnswered || nothingToSend
+    anyAnswered || nothingToSend,
+    unansweredRequired !== -1 && unansweredRequired !== index
   )
   const confirmBlocked = askConfirmAction({ isLast, anyAnswered, waitsForAnswer }) === 'stay'
   const currentTypedAnswerChosen = typedAnswerChosen(index)
@@ -271,7 +249,9 @@ export function NativeChatQuestionCard({
     <NativeChatQuestionSteps
       questions={prompt.questions}
       current={index}
-      answered={prompt.questions.map((_, i) => answerFor(i).length > 0)}
+      answered={prompt.questions.map(
+        (_, i) => pickedOptions(i).length > 0 || answerFor(i).length > 0
+      )}
       disabled={isSubmitting}
       onStep={goTo}
       className={className}

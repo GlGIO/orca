@@ -21,6 +21,7 @@ export type ActivityBarItem = {
   pluginKey?: string
   icon: React.ComponentType<{ size?: number; className?: string }>
   title: string
+  accessibleTitle?: string
   shortcut: string
   /** When true, hidden for non-git (folder-mode) repos. */
   gitOnly?: boolean
@@ -57,7 +58,8 @@ function activityItemAriaLabel(
   status?: CheckStatus | null,
   t: Translate = translate
 ): string {
-  const titled = item.shortcut ? `${item.title} (${item.shortcut})` : item.title
+  const title = item.accessibleTitle ?? item.title
+  const titled = item.shortcut ? `${title} (${item.shortcut})` : title
   const base = item.count
     ? `${titled}, ${item.countLabel ?? t('bots.upNext.newCount', '{{count}} new', { count: item.count })}`
     : titled
@@ -265,7 +267,9 @@ export function ActivityBarButton({
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
       <TooltipContent side={isTop ? 'bottom' : 'left'} sideOffset={6}>
-        {item.shortcut ? `${item.title} (${item.shortcut})` : item.title}
+        {item.shortcut
+          ? `${item.accessibleTitle ?? item.title} (${item.shortcut})`
+          : (item.accessibleTitle ?? item.title)}
       </TooltipContent>
     </Tooltip>
   )

@@ -124,8 +124,8 @@ it('shows a one-line message whole as a plain line with nothing to open', () => 
 })
 
 it('opens a one-line message the row cuts short', () => {
-  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(400)
-  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(120)
+  // The line's text lays out wider than its box.
+  vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 400, 20))
   card([
     {
       type: 'text',

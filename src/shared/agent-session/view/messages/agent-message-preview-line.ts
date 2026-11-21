@@ -36,9 +36,12 @@ function plainMarkdownLine(line: string): string {
     line
       .replace(/^(?:#{1,6}|>+|[-*+]|\d+[.)])\s+/, '')
       .replace(/^\[[ xX]\]\s+/, '')
-      // Images and links keep their words; their addresses stay in the open message.
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      // Images and links keep their words; their addresses (which may hold parentheses) stay in
+      // the open message.
+      .replace(/!?\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)/g, '$1')
       .replace(/\*\*|__|~~|`/g, '')
+      // Single emphasis, as in *Done*, but not a lone star such as 5 * 3.
+      .replace(/(^|[^\w*])\*(?=\S)([^*]*?\S)\*(?![\w*])/g, '$1$2')
       .replace(/\s+/g, ' ')
       .trim()
   )

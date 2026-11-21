@@ -15,10 +15,48 @@ import {
 } from './NativeChatMessageTimestamp'
 
 /** Takes no width until the row is hovered or holds keyboard focus, so it never cuts the first line
- *  short; kept on touch, where nothing hovers. A narrow chat shows a row button's time in its open
- *  message instead. */
+ *  short; kept on touch, where nothing hovers. It stays laid out at zero width, its gap pulled back,
+ *  so a row can measure the room it will need. A narrow chat shows a row button's time in its open message instead. */
 const TIME =
-  'shrink-0 can-hover:hidden can-hover:group-hover/agent-row:block can-hover:group-has-[:focus-visible]/agent-row:block @max-[360px]/agent-row:hidden!'
+  'shrink-0 overflow-hidden can-hover:-ml-1.5 can-hover:w-0 can-hover:group-hover/agent-row:ml-0 can-hover:group-hover/agent-row:w-auto can-hover:group-has-[:focus-visible]/agent-row:ml-0 can-hover:group-has-[:focus-visible]/agent-row:w-auto @max-[360px]/agent-row:hidden!'
+
+/** How much wider an element's text is than its box, to the fraction of a pixel: the text is laid out
+ *  whole even where it is drawn cut or the box has no width. Whole-pixel scroll widths miss a line a
+ *  fraction of a pixel too long, which already ends in an ellipsis. */
+function textOverflow(element: HTMLElement): number {
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  const style = getComputedStyle(element)
+  const box =
+    element.getBoundingClientRect().width -
+    (Number.parseFloat(style.paddingLeft) || 0) -
+    (Number.parseFloat(style.paddingRight) || 0)
+  return range.getBoundingClientRect().width - box
+}
+
+/** Whether the first line is cut now, or would be once the time shows on hover or focus: the line
+ *  fits only if the row has room left for the time's hidden width. */
+function previewCutShort(
+  preview: HTMLElement,
+  row: HTMLElement,
+  time: HTMLElement | null
+): boolean {
+  if (textOverflow(preview) > 0.01) {
+    return true
+  }
+  // A hidden time also pulls its gap back with a negative margin; both come back when it shows.
+  const timeCut = time ? textOverflow(time) : 0
+  const hiddenTime =
+    time && timeCut > 0.01
+      ? timeCut - (Number.parseFloat(getComputedStyle(time).marginLeft) || 0)
+      : 0
+  const container = row.parentElement
+  // The row may reach past its container by its own 0.25rem bleed on each side.
+  const free = container
+    ? container.getBoundingClientRect().width + 8 - row.getBoundingClientRect().width
+    : 0
+  return hiddenTime > free + 0.01
+}
 
 /**
  * A message between agents as one line: its sender's mark, a kind word for a start or a task, the
@@ -66,7 +104,9 @@ export function NativeChatAgentMessageRow({
   const { findActive } = useContext(NativeChatToolRunWindowContext)
   const time = useNativeChatMessageTimeLabel(timestamp)
   const detailsId = useId()
+  const rowRef = useRef<HTMLDivElement | null>(null)
   const previewRef = useRef<HTMLSpanElement | null>(null)
+  const timeRef = useRef<HTMLSpanElement | null>(null)
   const [previewCut, setPreviewCut] = useState(false)
   const expandable = details !== null
   const open = disclosure.open
@@ -76,14 +116,18 @@ export function NativeChatAgentMessageRow({
   const measures = expandable && !more && preview !== '' && !shown
   useLayoutEffect(() => {
     const node = previewRef.current
-    if (!measures || !node) {
+    const row = rowRef.current
+    if (!measures || !node || !row) {
       return
     }
-    const measure = () => setPreviewCut(node.scrollWidth > node.clientWidth + 1)
+    const measure = () => setPreviewCut(previewCutShort(node, row, timeRef.current))
     measure()
     // A narrower chat cuts the line; a wider one can show it whole again.
     const observer = new ResizeObserver(measure)
     observer.observe(node)
+    if (row.parentElement) {
+      observer.observe(row.parentElement)
+    }
     return () => observer.disconnect()
   }, [measures, preview])
   const state =
@@ -102,6 +146,7 @@ export function NativeChatAgentMessageRow({
   return (
     <div className={cn('@container/agent-row', className)}>
       <div
+        ref={rowRef}
         className={cn(
           'group/agent-row relative -mx-1 flex w-fit max-w-[calc(100%+0.5rem)] min-h-6 items-center gap-1.5 rounded-md px-1 font-sans text-sm leading-relaxed text-chat-foreground-faint',
           toggles && 'hover:bg-foreground/[0.04]',
@@ -175,7 +220,7 @@ export function NativeChatAgentMessageRow({
           />
         ) : null}
         {timestamp !== null ? (
-          <span aria-hidden className={cn(content, TIME)}>
+          <span ref={timeRef} aria-hidden className={cn(content, TIME)}>
             <NativeChatMessageTimestamp timestamp={timestamp} />
           </span>
         ) : null}

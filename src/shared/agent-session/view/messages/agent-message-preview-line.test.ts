@@ -21,6 +21,16 @@ describe('agentMessagePreviewLine', () => {
     ).toEqual({ line: 'Done: all tests pass, see the PR', more: true })
   })
 
+  it('drops single emphasis and keeps a link whose address holds parentheses', () => {
+    expect(agentMessagePreviewLine('*Done*, all green')).toEqual({
+      line: 'Done, all green',
+      more: true
+    })
+    expect(agentMessagePreviewLine('***Done***').line).toBe('Done')
+    expect(agentMessagePreviewLine('See [PR](https://x.test/(a)b) now').line).toBe('See PR now')
+    expect(agentMessagePreviewLine('5 * 3 is 15')).toEqual({ line: '5 * 3 is 15', more: false })
+  })
+
   it('keeps underscores inside names such as term_0', () => {
     expect(agentMessagePreviewLine('Reply to term_0 when done').line).toBe(
       'Reply to term_0 when done'

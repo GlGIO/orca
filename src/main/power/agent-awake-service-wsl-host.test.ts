@@ -12,7 +12,7 @@ const START = 10_000_000_000
 const HOUR = 60 * 60 * 1000
 let now = START
 
-function createService() {
+function createService(mode: 'auto' | 'off' | 'on' = 'auto') {
   const assertion = { start: vi.fn(() => true), stop: vi.fn(), dispose: vi.fn() }
   const blocker = { start: vi.fn(() => 1), stop: vi.fn(), isStarted: vi.fn(() => true) }
   const service = new AgentAwakeService({
@@ -24,7 +24,7 @@ function createService() {
     platform: 'win32',
     powerMonitor: null
   })
-  service.setMode('auto')
+  service.setMode(mode)
   return service
 }
 
@@ -45,20 +45,29 @@ function frame(type: 'snapshots' | 'updated', hostUpdatedAt: number | null) {
 }
 
 /** A WSL host service and host stream with no renderer involved. */
-function createHost(service: AgentAwakeService, failedOpens = 0) {
+function createHost(
+  service: AgentAwakeService,
+  failedOpens = 0,
+  initialState: string | null = 'ready'
+) {
   let opensToFail = failedOpens
-  let hostState: string | null = 'ready'
+  let hostState: string | null = initialState
   let hostsChanged = (): void => {}
   let send = (_frame: unknown): void => {}
   let endStream = (): void => {}
   const close = vi.fn()
+  const opens = vi.fn()
   const watcher = new WslHostAgentAwake({
     listHosts: () => (hostState ? [{ environmentId: 'wsl-env', state: hostState }] : []),
     onHostsChanged: (listener) => {
       hostsChanged = listener
       return () => {}
     },
+    // Same gate as production: only Auto counts agents.
+    isEnabled: () => service.getMode() === 'auto',
+    onEnabledChanged: (listener) => service.subscribe(listener),
     openStream: async (_environmentId, handlers) => {
+      opens()
       if (opensToFail > 0) {
         opensToFail -= 1
         throw new Error('host did not answer')
@@ -73,6 +82,7 @@ function createHost(service: AgentAwakeService, failedOpens = 0) {
   watchers.push(watcher)
   return {
     close,
+    opens,
     send: (value: unknown) => send(value),
     endStream: () => endStream(),
     setHostState: async (state: string | null) => {
@@ -209,6 +219,72 @@ describe('keep-awake for agents on WSL hosts', () => {
     service.setWslHostStatuses('wsl-env', [{ paneKey: 'p', receivedAt: START }])
     expect(service.getStatus().active).toBe(true)
     expect(service.getWorkingAgentCount()).toBe(0)
+    service.dispose()
+  })
+
+  it('opens no host stream while keep-awake is Off or On', async () => {
+    for (const mode of ['off', 'on'] as const) {
+      const service = createService(mode)
+      const host = createHost(service)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(host.opens).not.toHaveBeenCalled()
+      service.dispose()
+    }
+  })
+
+  it('opens nothing when a host becomes ready while keep-awake is Off', async () => {
+    const service = createService('off')
+    const host = createHost(service, 0, 'starting')
+    await host.setHostState('ready')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(host.opens).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
+  it('opens ready hosts when Auto turns on, and tears them down when it turns off', async () => {
+    const service = createService('off')
+    const host = createHost(service)
+    await Promise.resolve()
+    expect(host.opens).not.toHaveBeenCalled()
+
+    service.setMode('auto')
+    await Promise.resolve()
+    expect(host.opens).toHaveBeenCalledTimes(1)
+    host.send({ type: 'snapshots', snapshots: [] })
+    host.send(frame('updated', 500))
+    expect(service.getStatus().active).toBe(true)
+
+    service.setMode('off')
+    expect(host.close).toHaveBeenCalledTimes(1)
+    // The host's agents are dropped, not left to lapse: turning Auto back on starts from nothing.
+    service.setMode('auto')
+    expect(service.getStatus().active).toBe(false)
+    await Promise.resolve()
+    expect(host.opens).toHaveBeenCalledTimes(2)
+    host.send(frame('snapshots', 600))
+    expect(service.getStatus().active).toBe(true)
+    service.dispose()
+  })
+
+  it('cancels a pending retry when keep-awake turns off', async () => {
+    const service = createService()
+    const host = createHost(service, 1)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(host.opens).toHaveBeenCalledTimes(1)
+
+    service.setMode('off')
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(host.opens).toHaveBeenCalledTimes(1)
+    service.dispose()
+  })
+
+  it('closes a stream that finishes opening after keep-awake turned off', async () => {
+    const service = createService()
+    const host = createHost(service)
+    service.setMode('off')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(host.opens).toHaveBeenCalledTimes(1)
+    expect(host.close).toHaveBeenCalledTimes(1)
     service.dispose()
   })
 })

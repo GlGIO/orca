@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentAwakeService } from './agent-awake-service'
 import { AGENT_AWAKE_STATUS_STALE_AFTER_MS } from './agent-awake-status-lease'
 import { WslHostAgentAwake } from './wsl-host-agent-awake'
+import { keepAwakeCountsAgentsGate } from '../ipc/wsl/wsl-host-agent-awake-wiring'
 
 vi.mock('electron', () => ({
+  app: { getPath: () => '/tmp' },
   powerMonitor: { on: vi.fn(), off: vi.fn() },
   powerSaveBlocker: { start: vi.fn(), stop: vi.fn(), isStarted: vi.fn() }
 }))
@@ -63,9 +65,7 @@ function createHost(
       hostsChanged = listener
       return () => {}
     },
-    // Same gate as production: only Auto counts agents.
-    isEnabled: () => service.getMode() === 'auto',
-    onEnabledChanged: (listener) => service.subscribe(listener),
+    ...keepAwakeCountsAgentsGate(service),
     openStream: async (_environmentId, handlers) => {
       opens()
       if (opensToFail > 0) {
@@ -256,7 +256,7 @@ describe('keep-awake for agents on WSL hosts', () => {
 
     service.setMode('off')
     expect(host.close).toHaveBeenCalledTimes(1)
-    // The host's agents are dropped, not left to lapse: turning Auto back on starts from nothing.
+    // The host's agents are dropped at once, not left to lapse, until the reopened stream reports.
     service.setMode('auto')
     expect(service.getStatus().active).toBe(false)
     await Promise.resolve()
@@ -285,6 +285,37 @@ describe('keep-awake for agents on WSL hosts', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(host.opens).toHaveBeenCalledTimes(1)
     expect(host.close).toHaveBeenCalledTimes(1)
+    service.dispose()
+  })
+
+  it('counts an agent already working when Auto turns on from Off or On', async () => {
+    for (const mode of ['off', 'on'] as const) {
+      const service = createService(mode)
+      const host = createHost(service)
+      service.setMode('auto')
+      await Promise.resolve()
+
+      host.send(frame('snapshots', 500))
+      expect(service.getStatus().active).toBe(true)
+      service.dispose()
+    }
+  })
+
+  it('lets a row stuck on the same evidence lapse after keep-awake turns off and on', async () => {
+    const service = createService()
+    const host = createHost(service)
+    await Promise.resolve()
+    host.send({ type: 'snapshots', snapshots: [] })
+    host.send(frame('updated', 500))
+
+    service.setMode('off')
+    service.setMode('auto')
+    await Promise.resolve()
+    host.send(frame('snapshots', 500))
+    expect(service.getStatus().active).toBe(true)
+    // Its lease still runs from the first receipt, before keep-awake was turned off.
+    now = START + AGENT_AWAKE_STATUS_STALE_AFTER_MS + 1
+    expect(service.getStatus().active).toBe(false)
     service.dispose()
   })
 })
